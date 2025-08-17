@@ -236,6 +236,51 @@ describe('ElasticsearchService', () => {
     });
   });
 
+  describe('generateDocumentId', () => {
+    test('should generate consistent IDs for same URL', () => {
+      const url = 'https://example.com/test';
+      const id1 = elasticsearchService.generateDocumentId(url);
+      const id2 = elasticsearchService.generateDocumentId(url);
+      
+      expect(id1).toBe(id2);
+    });
+
+    test('should generate different IDs for different URLs', () => {
+      const url1 = 'https://example.com/test1';
+      const url2 = 'https://example.com/test2';
+      const id1 = elasticsearchService.generateDocumentId(url1);
+      const id2 = elasticsearchService.generateDocumentId(url2);
+      
+      expect(id1).not.toBe(id2);
+    });
+
+    test('should generate IDs under Elasticsearch 512-byte limit', () => {
+      // Test with very long URL that would exceed base64url limit
+      const longUrl = 'https://scholar.google.com/scholar?q=' + 'A'.repeat(1000) + '&hl=en&as_sdt=0&as_vis=1&oi=scholart';
+      const id = elasticsearchService.generateDocumentId(longUrl);
+      
+      // SHA-256 hex output is always 64 characters = 64 bytes (well under 512)
+      expect(id.length).toBe(64);
+      expect(Buffer.byteLength(id, 'utf8')).toBeLessThan(512);
+    });
+
+    test('should generate valid hex string', () => {
+      const url = 'https://example.com/test';
+      const id = elasticsearchService.generateDocumentId(url);
+      
+      // Should be valid hex (only 0-9, a-f characters)
+      expect(id).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    test('should handle URLs with special characters', () => {
+      const urlWithSpecialChars = 'https://example.com/test?q=hello%20world&filter=日本語';
+      const id = elasticsearchService.generateDocumentId(urlWithSpecialChars);
+      
+      expect(id.length).toBe(64);
+      expect(id).toMatch(/^[0-9a-f]{64}$/);
+    });
+  });
+
   describe('close', () => {
     test('should close client connection', async () => {
       await elasticsearchService.close();
