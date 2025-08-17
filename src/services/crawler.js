@@ -11,12 +11,14 @@ const robotsService = require('./robots-service');
 const rateLimiter = require('./rate-limiter');
 const urlManager = require('./url-manager');
 
+// Main crawler orchestrating the crawl process with dual-mode fetching (HTTP vs Puppeteer) and queue-driven URL discovery. Manages the complete lifecycle from URL validation to content indexing.
 class Crawler {
   constructor() {
     this.browser = null;
     this.isShuttingDown = false;
   }
 
+  // Initialize Puppeteer browser instance with headless mode and optimized flags for server environments
   async initialize() {
     try {
       this.browser = await puppeteer.launch({
@@ -45,7 +47,7 @@ class Crawler {
     try {
       logger.info('Starting crawl', { url, depth, maxDepth });
 
-      // Check if already crawled recently
+      // Recrawl prevention: skip URLs crawled within threshold to avoid duplicate work
       if (await this.isRecentlyCrawled(url)) {
         logger.debug('URL recently crawled, skipping', { url });
         return { success: true, skipped: true };
@@ -97,7 +99,7 @@ class Crawler {
 
       await elasticsearchService.indexDocument(document);
 
-      // Extract and queue new URLs if within depth limit
+      // Depth-limited URL discovery: prevents infinite crawling while building comprehensive site maps
       if (depth < maxDepth && extractedContent.links) {
         await this.queueNewURLs(extractedContent.links, url, depth + 1, domainFilter);
       }
@@ -127,7 +129,7 @@ class Crawler {
     try {
       const startTime = Date.now();
       
-      // Try simple HTTP request first
+      // HTTP-first strategy: faster and more efficient for static content before falling back to Puppeteer
       const httpResult = await this.fetchWithHTTP(url);
       if (httpResult.success) {
         logger.debug('Fetched with HTTP', { 
@@ -138,7 +140,7 @@ class Crawler {
         return httpResult;
       }
 
-      // Fallback to Puppeteer for dynamic content
+      // Puppeteer fallback: handles JavaScript-rendered content that HTTP requests can't access
       const puppeteerResult = await this.fetchWithPuppeteer(url);
       logger.debug('Fetched with Puppeteer', { 
         url, 
@@ -154,11 +156,13 @@ class Crawler {
     }
   }
 
+  // HTTP fetching: lightweight and fast for static HTML content using axios with proper headers
   async fetchWithHTTP(url) {
     try {
       const response = await axios.get(url, {
         timeout: config.crawler.requestTimeout,
         maxContentLength: config.crawler.maxPageSize,
+        // Browser-like headers to avoid being blocked by anti-bot measures
         headers: {
           'User-Agent': config.crawler.userAgent,
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -198,6 +202,7 @@ class Crawler {
     }
   }
 
+  // Puppeteer fetching: full browser automation for JavaScript-heavy sites with resource blocking for performance
   async fetchWithPuppeteer(url) {
     let page = null;
     
@@ -211,7 +216,7 @@ class Crawler {
       await page.setUserAgent(config.crawler.userAgent);
       await page.setViewport({ width: 1366, height: 768 });
       
-      // Block unnecessary resources for faster loading
+      // Resource blocking: disable images, CSS, fonts to speed up crawling and focus on text content
       await page.setRequestInterception(true);
       page.on('request', (req) => {
         const resourceType = req.resourceType();
@@ -232,7 +237,7 @@ class Crawler {
         return { success: false, error: `HTTP ${statusCode}` };
       }
 
-      // Wait for dynamic content
+      // Fixed delay to allow JavaScript rendering and AJAX requests to complete
       await page.waitForTimeout(2000);
 
       const content = await page.content();
@@ -309,9 +314,11 @@ class Crawler {
     }
   }
 
+  // Queue management: validates and filters discovered URLs before adding to crawl queue for breadth-first traversal
   async queueNewURLs(links, parentUrl, depth, domainFilter) {
     const validUrls = [];
     
+    // Multi-stage filtering: URL format → domain whitelist → duplicate check
     for (const link of links) {
       if (!urlManager.isValidURL(link.url)) continue;
       if (!urlManager.shouldCrawlDomain(link.url, domainFilter)) continue;
@@ -320,6 +327,7 @@ class Crawler {
       validUrls.push(link.url);
     }
 
+    // Batch queue operations: add valid URLs with parent tracking for link graph reconstruction
     if (validUrls.length > 0) {
       for (const url of validUrls) {
         await urlManager.addURLToQueue(url, parentUrl, depth);
@@ -333,6 +341,7 @@ class Crawler {
     }
   }
 
+  // Queue status management: updates URL processing status for worker coordination and retry logic
   async markURLProcessed(url, success, errorMessage = null) {
     try {
       const status = success ? 'completed' : 'failed';
