@@ -1,4 +1,5 @@
 const { Client } = require('@elastic/elasticsearch');
+const crypto = require('crypto');
 const config = require('../config');
 const logger = require('../utils/logger');
 
@@ -393,9 +394,9 @@ class ElasticsearchService {
     }
   }
 
-  // Generate consistent document IDs from URLs using base64url encoding for safe Elasticsearch ID format. This ensures the same URL always gets the same ID for updates/deduplication.
+  // Generate consistent document IDs from URLs using SHA-256 hash to ensure fixed length under Elasticsearch's 512-byte limit. This ensures the same URL always gets the same ID for updates/deduplication.
   generateDocumentId(url) {
-    return Buffer.from(url).toString('base64url');
+    return crypto.createHash('sha256').update(url).digest('hex');
   }
 
   extractDomain(url) {
