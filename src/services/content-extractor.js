@@ -3,6 +3,7 @@ const mime = require('mime-types');
 const crypto = require('crypto');
 const logger = require('../utils/logger');
 
+// Extracts structured data from various content types (HTML, JSON, plain text) using string manipulation and parsing techniques. Focuses on cleaning and normalizing text data for search indexing.
 class ContentExtractor {
   constructor() {
     this.stopWords = new Set([
@@ -44,7 +45,7 @@ class ContentExtractor {
   }
 
   extractTitle($) {
-    // Try multiple selectors for title
+    // Fallback strategy: try multiple selectors in priority order until content is found. Uses both attribute values (meta tags) and element text content.
     const selectors = [
       'title',
       'h1',
@@ -57,8 +58,10 @@ class ContentExtractor {
     for (const selector of selectors) {
       const element = $(selector).first();
       if (element.length) {
+        // Extract from 'content' attribute (meta tags) or inner text, preferring attributes for meta tags
         const title = element.attr('content') || element.text();
         if (title && title.trim().length > 0) {
+          // Normalize whitespace and truncate to prevent overly long titles in search results
           return title.trim().substring(0, 200);
         }
       }
@@ -81,6 +84,7 @@ class ContentExtractor {
       if (element.length) {
         const description = element.attr('content') || element.text();
         if (description && description.trim().length > 0) {
+          // Limit description length for database storage and search snippet display
           return description.trim().substring(0, 500);
         }
       }
@@ -109,6 +113,7 @@ class ContentExtractor {
       const element = $(selector).first();
       if (element.length) {
         const content = element.text();
+        // Ensure content has sufficient length to be meaningful (filters out navigation elements)
         if (content && content.trim().length > 100) {
           return this.cleanText(content);
         }
@@ -123,15 +128,17 @@ class ContentExtractor {
   extractKeywords($) {
     const keywords = new Set();
     
-    // Extract from meta keywords
+    // Extract from meta keywords tag and parse comma-separated values
     const metaKeywords = $('[name="keywords"]').attr('content');
     if (metaKeywords) {
+      // Split by comma, normalize case, and filter short words that aren't meaningful
       metaKeywords.split(',').forEach(keyword => {
         const clean = keyword.trim().toLowerCase();
         if (clean.length > 2) keywords.add(clean);
       });
     }
 
+    // Convert Set to Array and limit to prevent keyword spam in search index
     return Array.from(keywords).slice(0, 20);
   }
 
@@ -142,15 +149,17 @@ class ContentExtractor {
       const href = $(element).attr('href');
       const text = $(element).text().trim();
       
+      // Filter out non-web links (email, anchors) and ensure both URL and text exist
       if (href && text && !href.startsWith('mailto:') && !href.startsWith('#')) {
         try {
           let absoluteUrl = new URL(href, baseUrl).toString();
-          // Remove trailing slash for consistency with tests
+          // Normalize URLs by removing trailing slashes for consistent deduplication
           if (absoluteUrl.endsWith('/') && absoluteUrl !== baseUrl + '/') {
             absoluteUrl = absoluteUrl.slice(0, -1);
           }
           links.push({
             url: absoluteUrl,
+            // Truncate link text to prevent database bloat from very long anchor text
             text: text.substring(0, 100)
           });
         } catch (error) {
@@ -205,6 +214,7 @@ class ContentExtractor {
 
     for (const lang of langSources) {
       if (lang) {
+        // Normalize language codes to lowercase and limit length (e.g., 'en-US' -> 'en-us')
         return lang.substring(0, 5).toLowerCase();
       }
     }
@@ -212,21 +222,24 @@ class ContentExtractor {
     return 'en'; // Default to English
   }
 
+  // Normalizes text by collapsing whitespace and removing special characters for clean indexing
   cleanText(text) {
     if (!text) return '';
     
     return text
-      .replace(/\s+/g, ' ') // Normalize whitespace
-      .replace(/[\r\n\t]/g, ' ') // Remove line breaks and tabs
+      .replace(/\s+/g, ' ') // Collapse multiple spaces, tabs, newlines into single spaces
+      .replace(/[\r\n\t]/g, ' ') // Convert line breaks and tabs to spaces for consistent formatting
       .trim()
-      .substring(0, 50000); // Limit content size
+      .substring(0, 50000); // Prevent extremely large content from overwhelming search index
   }
 
+  // Counts words by splitting on whitespace and filtering empty strings from consecutive spaces
   countWords(text) {
     if (!text) return 0;
     return text.split(/\s+/).filter(word => word.length > 0).length;
   }
 
+  // Creates SHA-256 hash of content for duplicate detection and change tracking
   generateContentHash(content) {
     return crypto.createHash('sha256')
       .update(content || '')
@@ -257,6 +270,7 @@ class ContentExtractor {
 
   extractFromJSON(jsonContent) {
     try {
+      // Parse and re-stringify JSON to normalize formatting and validate structure
       const parsed = JSON.parse(jsonContent);
       const content = JSON.stringify(parsed, null, 2);
       return {
@@ -272,8 +286,10 @@ class ContentExtractor {
     }
   }
 
+  // Main extraction router that determines content type and delegates to appropriate parser
   extractContent(content, contentType, url) {
     try {
+      // Normalize content type using mime-types library for consistent type detection
       const mimeType = mime.lookup(contentType) || contentType;
       
       if (mimeType.startsWith('text/html')) {

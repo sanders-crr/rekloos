@@ -2,8 +2,10 @@ const URL = require('url-parse');
 const db = require('../database/connection');
 const logger = require('../utils/logger');
 
+// Manages URL queue operations and validation for web crawling with deduplication and retry logic. Handles URL normalization to prevent duplicate crawling of equivalent URLs.
 class URLManager {
   constructor() {
+    // In-memory Set for fast duplicate detection during a crawling session
     this.seenUrls = new Set();
   }
 
@@ -14,7 +16,7 @@ class URLManager {
       // Remove fragment
       parsed.set('hash', '');
       
-      // Sort query parameters for consistency
+      // Sort query parameters alphabetically to treat ?a=1&b=2 and ?b=2&a=1 as identical URLs
       const sortedQuery = Object.keys(parsed.query)
         .sort()
         .reduce((result, key) => {
@@ -24,7 +26,7 @@ class URLManager {
       
       parsed.set('query', sortedQuery);
       
-      // Remove trailing slash for consistency
+      // Remove trailing slash to treat /page and /page/ as the same URL
       if (parsed.pathname.endsWith('/') && parsed.pathname.length > 1) {
         parsed.set('pathname', parsed.pathname.slice(0, -1));
       }
@@ -36,6 +38,7 @@ class URLManager {
     }
   }
 
+  // Validates URLs to ensure they use web protocols and have valid structure
   isValidURL(url) {
     try {
       const parsed = new URL(url);
@@ -54,12 +57,14 @@ class URLManager {
     }
   }
 
+  // Domain whitelist validation supporting exact matches and subdomain patterns
   shouldCrawlDomain(url, allowedDomains = []) {
     if (allowedDomains.length === 0) return true;
     
     const domain = this.extractDomain(url);
     if (!domain) return false;
     
+    // Match exact domain or subdomains (blog.example.com matches example.com)
     return allowedDomains.some(allowed => 
       domain === allowed || domain.endsWith('.' + allowed)
     );
@@ -85,6 +90,7 @@ class URLManager {
     const normalizedUrl = this.normalizeURL(url);
     if (!normalizedUrl) return false;
 
+    // Check memory cache first for fast duplicate detection within this session
     if (this.seenUrls.has(normalizedUrl)) {
       return false;
     }
@@ -92,6 +98,7 @@ class URLManager {
     this.seenUrls.add(normalizedUrl);
 
     try {
+      // Insert with conflict handling - prevents database errors from duplicate URLs across sessions
       await db.query(`
         INSERT INTO url_queue (url, parent_url, depth, job_id)
         VALUES ($1, $2, $3, $4)
@@ -113,6 +120,7 @@ class URLManager {
 
   async getNextURLs(limit = 10) {
     try {
+      // Fetch URLs ready for processing with retry limit and priority/FIFO ordering
       const result = await db.query(`
         SELECT id, url, parent_url, depth, job_id
         FROM url_queue
@@ -123,6 +131,7 @@ class URLManager {
         LIMIT $1
       `, [limit]);
 
+      // Atomically mark selected URLs as processing and increment attempt counter
       if (result.rows.length > 0) {
         const ids = result.rows.map(row => row.id);
         await db.query(`
@@ -139,6 +148,7 @@ class URLManager {
     }
   }
 
+  // Updates queue item status after crawl attempt with optional error details
   async markURLCompleted(urlId, success = true, errorMessage = null) {
     try {
       const status = success ? 'completed' : 'failed';
@@ -154,6 +164,7 @@ class URLManager {
 
   async rescheduleFailedURLs(delayMinutes = 60) {
     try {
+      // Reset failed URLs to pending with future schedule time for exponential backoff
       const result = await db.query(`
         UPDATE url_queue 
         SET status = 'pending', 
@@ -169,8 +180,10 @@ class URLManager {
     }
   }
 
+  // Extracts URLs from HTML content using regex pattern matching on anchor tags
   extractURLsFromContent(content, baseUrl) {
     const urls = [];
+    // Regex captures href attribute values from anchor tags with flexible spacing
     const urlRegex = /<a[^>]+href\s*=\s*['"](.*?)['"][^>]*>/gi;
     let match;
 
@@ -187,7 +200,8 @@ class URLManager {
       }
     }
 
-    return [...new Set(urls)]; // Remove duplicates
+    // Convert to Set and back to Array for efficient duplicate removal
+    return [...new Set(urls)];
   }
 
   async getQueueStats() {
@@ -200,6 +214,7 @@ class URLManager {
         GROUP BY status
       `);
 
+      // Transform database rows into status->count object for easy consumption
       return result.rows.reduce((stats, row) => {
         stats[row.status] = parseInt(row.count);
         return stats;
