@@ -44,12 +44,8 @@ A comprehensive web crawling system built with Node.js that indexes pages in Ela
    curl http://localhost:3000/health
    ```
 
-5. Start a crawl job:
-   ```bash
-   curl -X POST http://localhost:3000/api/crawl \
-     -H "Content-Type: application/json" \
-     -d '{"url": "https://example.com", "maxDepth": 2}'
-   ```
+5. View the frontend:
+   [http://localhost:3000/](http://localhost:3000/)
 
 ### Local Development
 
